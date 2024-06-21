@@ -671,41 +671,65 @@ def get_goal_hint(spoiler: Spoiler, world: World, checked: set[str]) -> HintRetu
     goal, world_id = random.choice(goal_list)
     checked.add(location.name)
 
-    # Make sure this wasn't the last hintable location for other goals.
-    # If so, set weights to zero. This is important for one-hint-per-goal.
-    # Locations are unique per-category, so we don't have to check the others.
-    last_chance_overrides = []
-    for other_goal in goals:
-        if not zero_weights and other_goal.weight <= 0:
-            continue
+    hinted_goals = []
+    hint_colors = ['Light Blue']
 
-        hintable_required_locations = list(filter(hintable_required_locations_filter, other_goal.required_locations))
-        if not hintable_required_locations:
-            other_goal.weight = 0
-            if world.one_hint_per_goal:
-                for required_location in other_goal.required_locations:
-                    if required_location[0] == location:
-                        for other_world_id in required_location[3]:
-                            last_chance_overrides.append((other_goal, other_world_id))
-    if (last_chance_overrides):
-        # Replace randomly chosen goal with a goal that has all its locations
-        # hinted without being directly hinted itself.
-        goal, world_id = random.choice(last_chance_overrides)
+    goal_components = (lambda world_id, added_goal:
+        '%s %s' % (
+            (
+                "the",
+                added_goal.hint_text
+            )
+            if world_id == world.id 
+            else (
+                "Player %s's" % (world_id + 1),
+                spoiler.goal_categories[world_id][goal_category.name].get_goal(added_goal.name).hint_text)
+            )
+        )
 
-    # Goal weight to zero mitigates double hinting this goal
-    # Once all goals in a category are 0, selection is true random
-    goal.weight = 0
+    if world.hint_dist_user.get('multi_goal_hints', False):
+        # Collect all the goals this location is on the path to.
+        for other_goal in goals:
+            for required_location in other_goal.required_locations:
+                if required_location[0] == location:
+                    for world_id in required_location[3]:
+                        hinted_goals.append(goal_components(world_id, other_goal))
+                        hint_colors.append(other_goal.color)
+                        other_goal.weight = 0
+    else:
+        # Make sure this wasn't the last hintable location for other goals.
+        # If so, set weights to zero. This is important for one-hint-per-goal.
+        # Locations are unique per-category, so we don't have to check the others.
+        last_chance_overrides = []
+        for other_goal in goals:
+            if not zero_weights and other_goal.weight <= 0:
+                continue
+
+            hintable_required_locations = list(filter(hintable_required_locations_filter, other_goal.required_locations))
+            if not hintable_required_locations:
+                other_goal.weight = 0
+                if world.one_hint_per_goal:
+                    for required_location in other_goal.required_locations:
+                        if required_location[0] == location:
+                            for other_world_id in required_location[3]:
+                                last_chance_overrides.append((other_goal, other_world_id))
+        if (last_chance_overrides):
+            # Replace randomly chosen goal with a goal that has all its locations
+            # hinted without being directly hinted itself.
+            goal, world_id = random.choice(last_chance_overrides)
+
+        # Goal weight to zero mitigates double hinting this goal
+        # Once all goals in a category are 0, selection is true random
+        goal.weight = 0
+
+        hinted_goals.append(goal_components(world_id, goal))
+        hint_colors.append(goal.color)
 
     location_text = HintArea.at(location).text(world.settings.clearer_hints)
-    if world_id == world.id:
-        player_text = "the"
-        goal_text = goal.hint_text
-    else:
-        player_text = "Player %s's" % (world_id + 1)
-        goal_text = spoiler.goal_categories[world_id][goal_category.name].get_goal(goal.name).hint_text
 
-    return GossipText('%s is on %s %s.' % (location_text, player_text, goal_text), ['Light Blue', goal.color], [location.name], [location.item.name]), [location]
+    goals_text = ', '.join(hinted_goals)
 
+    return GossipText('%s is on %s.' % (location_text, goals_text), hint_colors, [location.name], [location.item.name]), [location]
 
 def get_barren_hint(spoiler: Spoiler, world: World, checked: set[str], all_checked: set[str]) -> HintReturn:
     if not hasattr(world, 'get_barren_hint_prev'):
