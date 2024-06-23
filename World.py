@@ -187,6 +187,8 @@ class World:
             self.hint_dist_user['upgrade_hints'] = 'off'
         if 'combine_trial_hints' not in self.hint_dist_user:
             self.hint_dist_user['combine_trial_hints'] = False
+        if 'multi_goal_hints' not in self.hint_dist_user:
+            self.hint_dist_user['multi_goal_hints'] = False
 
         # Validate hint distribution format
         # Originally built when I was just adding the type distributions
