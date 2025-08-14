@@ -65,6 +65,7 @@ CONTROL_CODES: dict[int, tuple[str, int, Callable[[Any], str]]] = {
     0xF0: ('silver_rupee', 1, lambda d: '<silver rupee count ' + "{:02x}".format(d) + '>' ),
     0xF1: ('key_count', 1, lambda d: '<key count ' + "{:02x}".format(d) + '>' ),
     0xF2: ('outgoing_item_filename', 0, lambda _: '<outgoing item filename>' ),
+    0xF3: ('farores_wind_destination', 0, lambda _: '<farores_wind_destination>' ),
 }
 
 # Maps unicode characters to corresponding bytes in OOTR's character set.
@@ -287,6 +288,8 @@ ITEM_MESSAGES: list[tuple[int, str]] = [
     (0x90B1, "\x08You got a \x05\x45Recovery Heart\x05\x40!\x01Your life energy is recovered!"),
     (0x90B2, "\x08You got a \x05\x46bundle of arrows\x05\x40!"),
     (0x90B3, "\x08\x13\x58You got \x05\x41Deku Seeds\x05\x40!\x01Use these as bullets\x01for your Slingshot."),
+    (0x90B4, "\x08You found a \x05\x41fairy\x05\x40!\x01Your health has been restored!"),
+    (0x90B5, "\x08You found \x05\x43literally nothing\x05\x40!"),
 ]
 
 KEYSANITY_MESSAGES: list[tuple[int, str]] = [
@@ -516,6 +519,7 @@ MISC_MESSAGES: list[tuple[int, tuple[str | bytearray, int]]] = [
     (0x0033, ("\x08\x13\x09You got \x05\x41Bombchus\x05\x40!", 0x23)),
     (0x0034, ("\x08\x13\x01You got a \x05\x41Deku Nut\x05\x40!", 0x23)),
     (0x0037, ("\x08\x13\x00You got a \x05\x41Deku Stick\x05\x40!", 0x23)),
+    (0x003B, ("\x08You cast Farore's Wind!\x01\x1C\x05\x42Return to \xF3\x01Dispel the Warp Point\x01Exit\x05\x40", 0x23)),
     (0x0043, ("\x08\x13\x15You got a \x05\x41Red Potion\x05\x40!\x01It will restore your health", 0x23)),
     (0x0044, ("\x08\x13\x16You got a \x05\x42Green Potion\x05\x40!\x01It will restore your magic.", 0x23)),
     (0x0045, ("\x08\x13\x17You got a \x05\x43Blue Potion\x05\x40!\x01It will recover your health\x01and magic.", 0x23)),
@@ -554,6 +558,7 @@ MISC_MESSAGES: list[tuple[int, tuple[str | bytearray, int]]] = [
     (0x045A, ("\x12\x68\x7AMweep\x07\x04\x5B", 0x23)),
     (0x045B, ("\x12\x68\x7AMweep", 0x23)),
     (0x045C, ("Come back when you have\x01your own bow and you'll get the\x01\x05\x41real prize\x05\x40!\x0E\x78", 0x00)),
+    (0x045D, ("\x12\x68\x5F\x05\x44This game seems shady. Maybe\x01the \x05\x41eye of truth\x05\x44 will show the\x01way forward?\x0E\x78", 0x00)),
     (0x6013, ("Hey, newcomer!\x04Want me to throw you in jail?\x01\x01\x1B\x05\x42No\x01Yes\x05\x40", 0x00)),
 ]
 
@@ -1369,20 +1374,19 @@ def update_warp_song_text(messages: list[Message], world: World) -> None:
         0x4004: 'LH Owl Flight -> Hyrule Field',
     }
 
-    if world.settings.logic_rules != "glitched": # Entrances not set on glitched logic so following code will error
-        for id, entr in msg_list.items():
-            if 'warp_songs_and_owls' in world.settings.misc_hints or not world.settings.warp_songs:
-                destination = world.get_entrance(entr).connected_region
-                destination_name = HintArea.at(destination)
-                color = COLOR_MAP[destination_name.color]
-                if destination_name.preposition(True) is not None:
-                    destination_name = f'to {destination_name}'
-            else:
-                destination_name = 'to a mysterious place'
-                color = COLOR_MAP['White']
+    for id, entr in msg_list.items():
+        if 'warp_songs_and_owls' in world.settings.misc_hints or not world.settings.warp_songs:
+            destination = world.get_entrance(entr).connected_region
+            destination_name = HintArea.at(destination)
+            color = COLOR_MAP[destination_name.color]
+            if destination_name.preposition(True) is not None:
+                destination_name = f'to {destination_name}'
+        else:
+            destination_name = 'to a mysterious place'
+            color = COLOR_MAP['White']
 
-            new_msg = f"\x08\x05{color}Warp {destination_name}?\x05\40\x09\x01\x01\x1b\x05\x42OK\x01No\x05\40"
-            update_message_by_id(messages, id, new_msg)
+        new_msg = f"\x08\x05{color}Warp {destination_name}?\x05\40\x09\x01\x01\x1b\x05\x42OK\x01No\x05\40"
+        update_message_by_id(messages, id, new_msg)
 
     if world.settings.owl_drops:
         for id, entr in owl_messages.items():

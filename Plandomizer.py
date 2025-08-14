@@ -20,8 +20,8 @@ from JSONDump import dump_obj, CollapseList, CollapseDict, AlignedDict, SortedDi
 from Location import Location, LocationIterator, LocationFactory
 from LocationList import location_groups, location_table
 from Search import Search
-from SettingsList import build_close_match, validate_settings
-from Spoiler import Spoiler, HASH_ICONS
+from SettingsList import build_close_match, validate_settings, settings_versioning
+from Spoiler import Spoiler, HASH_ICONS, PASSWORD_NOTES
 from version import __version__
 
 if TYPE_CHECKING:
@@ -278,7 +278,8 @@ class WorldDistribution:
         self.id: int = id
         self.base_pool: list[str] = []
         self.major_group: list[str] = []
-        self.song_as_items: bool = False
+        self.rewards_as_items: bool = False
+        self.songs_as_items: bool = False
         self.skipped_locations: list[Location] = []
         self.effective_starting_items: dict[str, StarterRecord] = {}
 
@@ -419,7 +420,7 @@ class WorldDistribution:
                 raise KeyError('Cannot add location that already exists')
         self.locations[new_location] = LocationRecord(new_item)
 
-    def configure_dungeons(self, world: World, mq_dungeon_pool: list[str], empty_dungeon_pool: list[str]) -> tuple[int, int]:
+    def configure_dungeons(self, world: World, mq_dungeon_pool: list[str], precompleted_dungeon_pool: list[str]) -> tuple[int, int]:
         dist_num_mq, dist_num_empty = 0, 0
         for (name, record) in self.dungeons.items():
             if record.mq is not None:
@@ -429,10 +430,10 @@ class WorldDistribution:
                     world.dungeon_mq[name] = True
         for (name, record) in self.empty_dungeons.items():
             if record.empty is not None:
-                empty_dungeon_pool.remove(name)
+                precompleted_dungeon_pool.remove(name)
                 if record.empty:
                     dist_num_empty += 1
-                    world.empty_dungeons[name].empty = True
+                    world.precompleted_dungeons[name] = True
         return dist_num_mq, dist_num_empty
 
     def configure_trials(self, trial_pool: list[str]) -> list[str]:
@@ -607,8 +608,10 @@ class WorldDistribution:
                     self.pool_remove_item([pool], item_name, record.count)
                 except KeyError:
                     pass
+                if item_name in item_groups["DungeonReward"]:
+                    self.rewards_as_items = True
                 if item_name in item_groups["Song"]:
-                    self.song_as_items = True
+                    self.songs_as_items = True
 
         junk_to_add = pool_size - len(pool)
         if junk_to_add > 0:
@@ -907,8 +910,10 @@ class WorldDistribution:
 
             item = self.get_item(ignore_pools, item_pools, location, player_id, record, worlds)
 
+            if location.type == 'Boss' and location.name != 'ToT Reward from Rauru' and item.type != 'DungeonReward':
+                self.rewards_as_items = True
             if location.type == 'Song' and item.type != 'Song':
-                self.song_as_items = True
+                self.songs_as_items = True
             location.world.push_item(location, item, True)
 
             if item.advancement:
@@ -1084,18 +1089,19 @@ class WorldDistribution:
             if iter_world.settings.empty_dungeons_mode != 'none':
                 skipped_locations_from_dungeons: list[Location] = []
                 if iter_world.settings.shuffle_dungeon_rewards in ('vanilla', 'reward'):
-                    skipped_locations_from_dungeons += [world.get_location(loc_name) for loc_name in location_groups['Boss']]
-                elif world.settings.shuffle_dungeon_rewards == 'dungeon':
+                    skipped_locations_from_dungeons += [iter_world.get_location(loc_name) for loc_name in location_groups['Boss'] if loc_name != 'ToT Reward from Rauru']
+                elif iter_world.settings.shuffle_dungeon_rewards == 'dungeon':
                     skipped_locations_from_dungeons += [location for location in iter_world.get_filled_locations() if location.item.type == 'DungeonReward']
-                if world.settings.shuffle_song_items == 'song':
-                    skipped_locations_from_dungeons += [world.get_location(loc_name) for loc_name in location_groups['Song']]
-                elif world.settings.shuffle_song_items == 'dungeon':
-                    skipped_locations_from_dungeons += [world.get_location(loc_name) for loc_name in location_groups['BossHeart']]
+                if iter_world.settings.shuffle_song_items == 'song':
+                    skipped_locations_from_dungeons += [iter_world.get_location(loc_name) for loc_name in location_groups['Song']]
+                elif iter_world.settings.shuffle_song_items == 'dungeon':
+                    skipped_locations_from_dungeons += [iter_world.get_location(loc_name) for loc_name in location_groups['BossHeart']]
                 for location in skipped_locations_from_dungeons:
-                    hint_area = HintArea.at(location)
-                    if hint_area.is_dungeon and iter_world.empty_dungeons[hint_area.dungeon_name].empty:
-                        skipped_locations.append(location)
-                        world.item_added_hint_types['barren'].append(location.item.name)
+                    if location.item is not None and world.id == location.item.world.id:
+                        hint_area = HintArea.at(location)
+                        if hint_area.is_dungeon and iter_world.precompleted_dungeons.get(hint_area.dungeon_name, False):
+                            skipped_locations.append(location)
+                            world.item_added_hint_types['barren'].append(location.item.name)
             for location in skipped_locations:
                 if iter_world.id == world.id:
                     self.skipped_locations.append(location)
@@ -1103,32 +1109,18 @@ class WorldDistribution:
                     add_starting_item_with_ammo(items, location.item.name)
 
         effective_adult_trade_item_index = -1
-        effective_child_trade_item_index = -1
-        effective_adult_trade_item = None
-        effective_child_trade_item = None
-        trade_starting_items = list(items.keys())
-        for item_name in trade_starting_items:
+        for item_name in items:
             if item_name in trade_items:
                 if item_name in world.settings.adult_trade_start:
                     if trade_items.index(item_name) > effective_adult_trade_item_index:
                         effective_adult_trade_item_index = trade_items.index(item_name)
-                        effective_adult_trade_item = items[item_name]
                 else:
                     raise RuntimeError(f'An unshuffled trade item was included as a starting item. Please either remove {item_name} from starting items or add it to Adult Trade Sequence Items.')
-                del items[item_name]
             if item_name in child_trade_items:
-                if item_name in world.settings.shuffle_child_trade or item_name == 'Zeldas Letter':
-                    if child_trade_items.index(item_name) > effective_child_trade_item_index:
-                        effective_child_trade_item_index = child_trade_items.index(item_name)
-                        effective_child_trade_item = items[item_name]
-                else:
+                if item_name not in world.settings.shuffle_child_trade and item_name != 'Zeldas Letter':
                     raise RuntimeError(f'An unshuffled trade item was included as a starting item. Please either remove {item_name} from starting items or add it to Shuffled Child Trade Sequence Items.')
-                del items[item_name]
 
-        if effective_child_trade_item_index >= 0:
-            items[child_trade_items[effective_child_trade_item_index]] = effective_child_trade_item
         if effective_adult_trade_item_index >= 0:
-            items[trade_items[effective_adult_trade_item_index]] = effective_adult_trade_item
             world.adult_trade_starting_inventory = trade_items[effective_adult_trade_item_index]
 
         self.effective_starting_items = items
@@ -1137,6 +1129,7 @@ class WorldDistribution:
 class Distribution:
     def __init__(self, settings: Settings, src_dict: Optional[dict[str, Any]] = None) -> None:
         self.file_hash: Optional[list[str]] = None
+        self.password: Optional[list[str]] = None
         self.playthrough: Optional[dict[str, dict[str, LocationRecord]]] = None
         self.entrance_playthrough: Optional[dict[str, dict[str, EntranceRecord]]] = None
 
@@ -1156,6 +1149,7 @@ class Distribution:
         # One-time init
         update_dict = {
             'file_hash': (self.src_dict.get('file_hash', []) + [None, None, None, None, None])[0:5],
+            'password': (self.src_dict.get('password', []) + [None, None, None, None, None, None])[0:6],
             'playthrough': None,
             'entrance_playthrough': None,
             '_settings': self.src_dict.get('settings', {}),
@@ -1169,6 +1163,10 @@ class Distribution:
 
         self.settings.update(update_dict['_settings'])
         if 'settings' in self.src_dict:
+            for setting in self.src_dict['settings']:
+                for setting_version in settings_versioning:
+                    if setting == setting_version.old_name:
+                        self.src_dict['settings'][setting_version.new_name] = self.src_dict['settings'].pop(setting_version.old_name)
             validate_settings(self.src_dict['settings'])
             self.src_dict['_settings'] = self.src_dict['settings']
             del self.src_dict['settings']
@@ -1292,11 +1290,15 @@ class Distribution:
         self_dict = {
             ':version': __version__,
             'file_hash': CollapseList(self.file_hash),
+            'password': CollapseList(self.password),
             ':seed': self.settings.seed,
             ':settings_string': self.settings.settings_string,
             ':enable_distribution_file': self.settings.enable_distribution_file,
             'settings': self.settings.to_json(),
         }
+
+        if not self.settings.password_lock or not spoiler:
+            self_dict.pop('password')
 
         if spoiler:
             world_dist_dicts = [world_dist.to_json() for world_dist in self.world_dists]
@@ -1337,6 +1339,7 @@ class Distribution:
 
     def update_spoiler(self, spoiler: Spoiler, output_spoiler: bool) -> None:
         self.file_hash = [HASH_ICONS[icon] for icon in spoiler.file_hash]
+        self.password = [PASSWORD_NOTES[note - 1] for note in spoiler.password]
 
         if not output_spoiler:
             return
@@ -1346,8 +1349,8 @@ class Distribution:
         for world in spoiler.worlds:
             world_dist = self.world_dists[world.id]
             world_dist.randomized_settings = {randomized_item: getattr(world.settings, randomized_item) for randomized_item in world.randomized_list}
-            world_dist.dungeons = {dung: DungeonRecord({ 'mq': world.dungeon_mq[dung] }) for dung in world.dungeon_mq}
-            world_dist.empty_dungeons = {dung: EmptyDungeonRecord({ 'empty': world.empty_dungeons[dung].empty }) for dung in world.empty_dungeons}
+            world_dist.dungeons = {name: DungeonRecord({ 'mq': is_mq }) for name, is_mq in world.dungeon_mq.items()}
+            world_dist.empty_dungeons = {name: EmptyDungeonRecord({ 'empty': is_precompleted }) for name, is_precompleted in world.precompleted_dungeons.items()}
             world_dist.trials = {trial: TrialRecord({ 'active': not world.skipped_trials[trial] }) for trial in world.skipped_trials}
             if hasattr(world, 'song_notes'):
                 world_dist.songs = {song: SongRecord({ 'notes': str(world.song_notes[song]) }) for song in world.song_notes}
